@@ -1,7 +1,7 @@
 import { RiDashboardHorizontalFill } from "react-icons/ri";
 import { IoBookmarksOutline, IoSettingsOutline } from "react-icons/io5";
 import Link from "next/link";
-import { UsersRound,  } from "lucide-react";
+import { MessageCircleMore, UsersRound, } from "lucide-react";
 import { BiCategory } from "react-icons/bi";
 import { GrUserExpert } from "react-icons/gr";
 import { MdAddTask } from "react-icons/md";
@@ -38,6 +38,11 @@ export const navLinks = [
     key: "option-task-option",
     icon: <MdAddTask size={18} />,
     label: <Link href={"/option-task-option"}>Other Task Option</Link>,
+  },
+  {
+    key: "chat",
+    icon: <MessageCircleMore size={18} />,
+    label: <Link href={"/chat"}>Chat</Link>,
   },
   {
     key: "faqs",
