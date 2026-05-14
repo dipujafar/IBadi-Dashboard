@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 'use client'
 import {
+  IconArrowLeft,
   IconMessageCircle,
   IconSend,
   IconClock,
@@ -21,10 +22,6 @@ import { useForm } from 'react-hook-form'
 
 type MessageStatus = 'sending' | 'sent' | 'failed'
 
-/**
- * Participant as it comes from the server inside chat_list:
- * { id, chatId, userId, user: { id, name, email, profile, role, phoneNumber } }
- */
 interface RawParticipant {
   id?: string
   chatId?: string
@@ -41,10 +38,6 @@ interface RawParticipant {
   }
 }
 
-/**
- * Message object as returned in chat_list.chats[].message
- * { id, text, seen, chatId, senderId, receiverId, createdAt, updatedAt }
- */
 interface RawLastMessage {
   id?: string
   text?: string
@@ -56,15 +49,6 @@ interface RawLastMessage {
   updatedAt?: string
 }
 
-/**
- * Full message as returned in the `message` event:
- * { id, text, seen, createdAt, updatedAt, chatId, senderId, receiverId,
- *   images: [{ id, url, messageId, userId }],
- *   chat: { id, status, ... },
- *   sender: { id, name, role, email, profile },
- *   receiver: { id, name, role, email, profile }
- * }
- */
 interface RawMessage {
   id?: string
   _id?: string
@@ -112,7 +96,6 @@ interface RawChatListItem {
   unreadMessageCount?: number
 }
 
-/** Normalised shapes used in the UI */
 interface ChatParticipant {
   id: string
   name: string
@@ -140,10 +123,6 @@ interface ChatListItem {
 
 // ─── Parsers ───────────────────────────────────────────────────────────────────
 
-/**
- * Extract the other participant's display info from a raw chat list item.
- * The server may return participants: [] for some items — handle gracefully.
- */
 function extractParticipant(raw: RawChatListItem): ChatParticipant | null {
   const participants = raw?.chat?.participants
   if (!Array.isArray(participants) || participants.length === 0) return null
@@ -167,21 +146,14 @@ function extractLastMessageText(
   return ''
 }
 
-/**
- * Parse chat_list socket response.
- * Shape: { chats: [...], pagination: { ... } }
- */
 function parseChatList(res: unknown): ChatListItem[] {
   if (!res || typeof res !== 'object') return []
   const r = res as Record<string, unknown>
   let rawChats: RawChatListItem[] = []
 
-  // { chats: [...] }
   if (Array.isArray(r.chats)) {
     rawChats = r.chats as RawChatListItem[]
-  }
-  // { data: { chats: [...] } }
-  else if (r.data && typeof r.data === 'object') {
+  } else if (r.data && typeof r.data === 'object') {
     const d = r.data as Record<string, unknown>
     if (Array.isArray(d.chats)) rawChats = d.chats as RawChatListItem[]
   }
@@ -202,10 +174,6 @@ function parseChatList(res: unknown): ChatListItem[] {
     .filter((x): x is ChatListItem => x !== null)
 }
 
-/**
- * Parse `message` socket response.
- * Shape: { data: [...], meta: { ... } }
- */
 function parseMessages(res: unknown): RawMessage[] {
   if (!res) return []
   if (Array.isArray(res)) return res as RawMessage[]
@@ -213,10 +181,8 @@ function parseMessages(res: unknown): RawMessage[] {
 
   const r = res as Record<string, unknown>
 
-  // { data: [...] }
   if (Array.isArray(r.data)) return r.data as RawMessage[]
 
-  // { data: { data: [...] } }
   if (r.data && typeof r.data === 'object') {
     const inner = r.data as Record<string, unknown>
     if (Array.isArray(inner.data)) return inner.data as RawMessage[]
@@ -230,7 +196,6 @@ function normalizeMessage(raw: RawMessage): ChatMessage | null {
   const id = raw.id ?? raw._id
   if (!id) return null
 
-  // senderId can be a top-level field or from nested sender object
   const senderId = raw.senderId ?? raw.sender?.id ?? ''
 
   const imageUrls = raw.images
@@ -249,7 +214,6 @@ function normalizeMessage(raw: RawMessage): ChatMessage | null {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
-/** Safe initials — never crashes on empty/undefined/null name */
 function getInitials(name?: string | null): string {
   if (!name || typeof name !== 'string' || name.trim() === '') return '?'
   return name
@@ -416,7 +380,6 @@ function MessageBubble({
     <div
       className={`flex items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
     >
-      {/* Avatar slot */}
       <div className='size-7 shrink-0'>
         {!isOwn && showAvatar && participant && (
           <Avatar name={participant.name} image={participant.image} size='sm' />
@@ -428,7 +391,6 @@ function MessageBubble({
           isOwn ? 'items-end' : 'items-start'
         }`}
       >
-        {/* Image attachments */}
         {message.imageUrls && message.imageUrls.length > 0 && (
           <div className='flex flex-wrap gap-1'>
             {message.imageUrls.map((url, i) => (
@@ -442,7 +404,6 @@ function MessageBubble({
           </div>
         )}
 
-        {/* Text bubble */}
         {message.text && (
           <div
             className={`
@@ -459,7 +420,6 @@ function MessageBubble({
           </div>
         )}
 
-        {/* Timestamp + status */}
         <div className='flex items-center gap-1 px-1'>
           <span className='text-[10px] text-muted-foreground'>
             {formatMessageTime(message.timestamp)}
@@ -545,7 +505,7 @@ function ConversationList({
   onSelect: (item: ChatListItem) => void
 }) {
   return (
-    <aside className='flex h-full w-72 shrink-0 flex-col border-r xl:w-80'>
+    <aside className='flex h-full w-full shrink-0 flex-col border-r md:w-72 xl:w-80'>
       <div className='px-5 py-4'>
         <h2 className='text-lg font-bold tracking-tight'>Messages</h2>
         <p className='text-xs text-muted-foreground mt-0.5'>
@@ -681,7 +641,6 @@ export default function CustomerSupportPage() {
   const { socket } = useSocket()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const user: any = useAppSelector((state) => state.auth.user)
-  // Support both userId and id field names from auth state
   const currentUserId: string = user?.userId ?? user?.id ?? ''
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -697,16 +656,18 @@ export default function CustomerSupportPage() {
   const [onlineUsers, setOnlineUsers] = useState<string[]>([])
   const [isTyping, setIsTyping] = useState(false)
 
+  // ── Mobile view state: 'list' | 'chat' ────────────────────────────────────
+  const [mobileView, setMobileView] = useState<'list' | 'chat'>('list')
+
   const chatBoxRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  // Stable ref so event callbacks never see a stale chatId
   const activeChatIdRef = useRef<string>('')
 
   useEffect(() => {
     activeChatIdRef.current = activeChatId
   }, [activeChatId])
 
-  // ── Auto-scroll ────────────────────────────────────────────────────────────
+  // ── Auto-scroll to bottom ──────────────────────────────────────────────────
   useEffect(() => {
     if (chatBoxRef.current) {
       chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight
@@ -714,8 +675,6 @@ export default function CustomerSupportPage() {
   }, [messages, isTyping])
 
   // ── Chat list ──────────────────────────────────────────────────────────────
-  // Emit:    my_chat_list  → {}
-  // Receive: chat_list     → { chats: [...], pagination: { ... } }
   useEffect(() => {
     if (!socket || !currentUserId) return
 
@@ -746,7 +705,6 @@ export default function CustomerSupportPage() {
   }, [socket, currentUserId])
 
   // ── Online users ───────────────────────────────────────────────────────────
-  // Receive: onlineUsersList → ["userId1", "userId2", ...]
   useEffect(() => {
     if (!socket) return
 
@@ -769,8 +727,6 @@ export default function CustomerSupportPage() {
   }, [socket])
 
   // ── Messages for active conversation ──────────────────────────────────────
-  // Emit:    message_page → { userId: "..." }
-  // Receive: message      → { data: [...], meta: { ... } }
   useEffect(() => {
     if (!socket || !currentUserId || !activeItem) return
 
@@ -788,7 +744,7 @@ export default function CustomerSupportPage() {
           .map(normalizeMessage)
           .filter((m): m is ChatMessage => m !== null)
           .reverse() // server returns newest-first; reverse for oldest-at-top
-        setMessages((normalized.reverse()))
+        setMessages(normalized)
       } catch (err) {
         console.error('[message] parse error:', err)
         setMessages([])
@@ -811,7 +767,6 @@ export default function CustomerSupportPage() {
   }, [socket, currentUserId, activeItem])
 
   // ── Real-time new messages ─────────────────────────────────────────────────
-  // Receive: new_message → same RawMessage shape
   useEffect(() => {
     if (!socket) return
 
@@ -824,7 +779,6 @@ export default function CustomerSupportPage() {
       const currentChatId = activeChatIdRef.current
       const msgChatId = normalized.chatId
 
-      // Message belongs to a different chat — bump sidebar unread count only
       if (currentChatId && msgChatId && msgChatId !== currentChatId) {
         setChatItems((prev) =>
           prev.map((item) =>
@@ -840,7 +794,6 @@ export default function CustomerSupportPage() {
         return
       }
 
-      // Belongs to open chat — append (replacing any optimistic copy)
       setMessages((prev) => {
         const withoutOptimistic = prev.filter(
           (m) =>
@@ -899,19 +852,24 @@ export default function CustomerSupportPage() {
       setMessages([])
       setIsTyping(false)
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
-      // Clear unread badge for this chat in the sidebar
       setChatItems((prev) =>
         prev.map((c) =>
           c.chatId === item.chatId ? { ...c, unreadCount: 0 } : c
         )
       )
       socket?.emit('seen', { chatId: item.chatId })
+      // On mobile, switch to chat view
+      setMobileView('chat')
     },
     [activeChatId, socket]
   )
 
+  // ── Back to list (mobile) ──────────────────────────────────────────────────
+  const handleBackToList = useCallback(() => {
+    setMobileView('list')
+  }, [])
+
   // ── Send message ───────────────────────────────────────────────────────────
-  // Emit: send_message → { receiverId: "...", text: "..." }
   const handleSend = useCallback(
     (text: string) => {
       if (!socket || !currentUserId || !activeItem) return
@@ -933,7 +891,6 @@ export default function CustomerSupportPage() {
         text,
       })
 
-      // Mark optimistic as sent; real message arrives via new_message event
       setTimeout(() => {
         setMessages((prev) =>
           prev.map((m) =>
@@ -981,23 +938,53 @@ export default function CustomerSupportPage() {
 
       {/* Main layout */}
       <div className='flex min-h-0 flex-1 overflow-hidden rounded-2xl border bg-background shadow-sm'>
-        {/* Left — conversation list */}
-        <ConversationList
-          items={chatItems}
-          activeChatId={activeChatId}
-          isLoading={isChatListLoading}
-          onlineUsers={onlineUsers}
-          onSelect={handleSelectConversation}
-        />
 
-        {/* Right — chat area */}
-        <div className='flex min-w-0 flex-1 flex-col'>
+        {/* ── Left — conversation list ────────────────────────────────────────
+            Desktop: always visible as sidebar
+            Mobile:  visible only when mobileView === 'list'
+        ──────────────────────────────────────────────────────────────────── */}
+        <div
+          className={`
+            h-full flex-col border-r
+            md:flex md:w-72 xl:w-80
+            ${mobileView === 'list' ? 'flex w-full' : 'hidden'}
+          `}
+        >
+          <ConversationList
+            items={chatItems}
+            activeChatId={activeChatId}
+            isLoading={isChatListLoading}
+            onlineUsers={onlineUsers}
+            onSelect={handleSelectConversation}
+          />
+        </div>
+
+        {/* ── Right — chat area ───────────────────────────────────────────────
+            Desktop: always visible
+            Mobile:  visible only when mobileView === 'chat'
+        ──────────────────────────────────────────────────────────────────── */}
+        <div
+          className={`
+            min-w-0 flex-1 flex-col
+            md:flex
+            ${mobileView === 'chat' ? 'flex w-full' : 'hidden'}
+          `}
+        >
           {!activeItem ? (
             <NoConversationSelected />
           ) : (
             <>
               {/* Header */}
               <div className='flex h-16 shrink-0 items-center gap-3 border-b px-5'>
+                {/* Back button — mobile only */}
+                <button
+                  onClick={handleBackToList}
+                  className='mr-1 flex shrink-0 items-center justify-center rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent md:hidden'
+                  aria-label='Back to conversations'
+                >
+                  <IconArrowLeft className='size-5' />
+                </button>
+
                 <Avatar
                   name={activeItem.participant.name}
                   image={activeItem.participant.image}
@@ -1016,10 +1003,10 @@ export default function CustomerSupportPage() {
                 </div>
               </div>
 
-              {/* Messages */}
+              {/* Messages — fixed height, scrollable */}
               <div
                 ref={chatBoxRef}
-                className='flex flex-1 flex-col gap-1 overflow-y-auto px-5 py-4'
+                className='flex flex-col gap-1 overflow-y-auto px-5 py-4 h-[calc(100vh-220px)]'
               >
                 {isMessagesLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (
