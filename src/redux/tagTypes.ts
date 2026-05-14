@@ -9,7 +9,8 @@ export const tagTypes = {
   experience: "experience",
   otherTask: "otherTask",
   faq: "faq",
-  booking: "booking"
+  booking: "booking",
+  dashboard: "dashboard",
 };
 
 export const tagTypesList = [
@@ -23,5 +24,6 @@ export const tagTypesList = [
   tagTypes.experience,
   tagTypes.otherTask,
   tagTypes.faq,
-  tagTypes.booking
+  tagTypes.booking,
+  tagTypes.dashboard,
 ];

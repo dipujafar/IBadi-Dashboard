@@ -1,13 +1,13 @@
 "use client";
 import StatCard from "@/components/(adminDashboard)/cards/statCard";
 import StatsCardSkeleton from "@/components/shared/StatCardSkeleton";
-import { useGetAttendanceStatsQuery } from "@/redux/api/usersApi";
+import { useGetStatQuery } from "@/redux/api/dashboardApi";
 import React from "react";
 
 
 
 export default function StatContainer() {
-  const { data, isLoading } = useGetAttendanceStatsQuery(undefined);
+  const { data, isLoading } = useGetStatQuery(undefined);
   console.log(data?.data);
 
   if (isLoading) return <StatsCardSkeleton />;
@@ -22,14 +22,14 @@ export default function StatContainer() {
     },
     {
       id: 2,
-      title: "Checked-in",
-      amount: data?.data?.checkedIn || "0",
+      title: "Total Service Provider",
+      amount: data?.data?.totalServiceProvider || "0",
       image: "/icon_2.png",
     },
     {
       id: 3,
-      title: "Not Arrived",
-      amount: data?.data?.notArrived || "0",
+      title: "Total Earning",
+      amount: `$${data?.data?.totalEarnings || "0"}`,
       image: "/icon_3.png",
     }
   ];

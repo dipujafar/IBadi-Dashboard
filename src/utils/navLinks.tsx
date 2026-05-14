@@ -42,7 +42,7 @@ export const navLinks = [
   {
     key: "chat",
     icon: <MessageCircleMore size={18} />,
-    label: <Link href={"/chat"}>Chat</Link>,
+    label: <Link href={"/chat"}>Customer Support</Link>,
   },
   {
     key: "faqs",

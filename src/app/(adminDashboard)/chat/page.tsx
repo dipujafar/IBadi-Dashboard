@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/preserve-manual-memoization */
+/* eslint-disable react-hooks/exhaustive-deps */
 'use client'
 import {
   IconMessageCircle,
@@ -17,135 +17,290 @@ import { useSocket } from '@/context/SocketContextApi'
 import { useAppSelector } from '@/redux/hooks'
 import { useForm } from 'react-hook-form'
 
-// ─── Types ─────────────────────────────────────────────────────────────────────
+// ─── Types matching exact server responses ─────────────────────────────────────
 
 type MessageStatus = 'sending' | 'sent' | 'failed'
 
-interface ServerMessage {
-  _id: string
-  sender: string        // userId string from server
-  receiver?: string
-  text?: string
-  imageUrl?: string[]
-  seen?: boolean
-  chat?: string
+/**
+ * Participant as it comes from the server inside chat_list:
+ * { id, chatId, userId, user: { id, name, email, profile, role, phoneNumber } }
+ */
+interface RawParticipant {
+  id?: string
+  chatId?: string
+  userId?: string
   createdAt?: string
   updatedAt?: string
+  user?: {
+    id?: string
+    name?: string
+    email?: string
+    profile?: string | null
+    role?: string
+    phoneNumber?: string
+  }
+}
+
+/**
+ * Message object as returned in chat_list.chats[].message
+ * { id, text, seen, chatId, senderId, receiverId, createdAt, updatedAt }
+ */
+interface RawLastMessage {
+  id?: string
+  text?: string
+  seen?: boolean
+  chatId?: string
+  senderId?: string
+  receiverId?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+/**
+ * Full message as returned in the `message` event:
+ * { id, text, seen, createdAt, updatedAt, chatId, senderId, receiverId,
+ *   images: [{ id, url, messageId, userId }],
+ *   chat: { id, status, ... },
+ *   sender: { id, name, role, email, profile },
+ *   receiver: { id, name, role, email, profile }
+ * }
+ */
+interface RawMessage {
+  id?: string
+  _id?: string
+  text?: string
+  seen?: boolean
+  createdAt?: string
+  updatedAt?: string
+  chatId?: string
+  senderId?: string
+  receiverId?: string
+  images?: Array<{
+    id?: string
+    url?: string
+    messageId?: string
+    userId?: string | null
+  }>
+  chat?: { id?: string; status?: string; createdAt?: string; updatedAt?: string }
+  sender?: {
+    id?: string
+    name?: string
+    role?: string
+    email?: string
+    profile?: string | null
+  }
+  receiver?: {
+    id?: string
+    name?: string
+    role?: string
+    email?: string
+    profile?: string | null
+  }
+}
+
+interface RawChat {
+  id?: string
+  status?: string
+  createdAt?: string
+  updatedAt?: string
+  participants?: RawParticipant[]
+}
+
+interface RawChatListItem {
+  chat?: RawChat
+  message?: RawLastMessage | string
+  unreadMessageCount?: number
+}
+
+/** Normalised shapes used in the UI */
+interface ChatParticipant {
+  id: string
+  name: string
+  image?: string
+  email?: string
 }
 
 interface ChatMessage {
   id: string
-  sender: string        // userId of sender
+  senderId: string
   text: string
-  imageUrl?: string[]
-  timestamp?: string    // normalized from createdAt
+  imageUrls?: string[]
+  timestamp?: string
+  chatId?: string
   status?: MessageStatus
   isPending?: boolean
 }
 
-/** Normalize a raw server message into our ChatMessage shape */
-function normalizeMessage(raw: ServerMessage): ChatMessage {
-  return {
-    id: raw._id,
-    sender: raw.sender,
-    text: raw.text ?? '',
-    imageUrl: raw.imageUrl,
-    timestamp: raw.createdAt,
-  }
-}
-
-interface ChatParticipant {
-  _id: string
-  name: string
-  image?: string
-}
-
-interface LastMessage {
-  _id?: string
-  text?: string
-  imageUrl?: string[]
-  seen?: boolean
-  sender?: string
-  receiver?: string
-  chat?: string
-  createdAt?: string
-  updatedAt?: string
-}
-
 interface ChatListItem {
-  chat: {
-    _id: string
-    participants: ChatParticipant[]
-  }
-  // The server returns the full last-message document, not a plain string
-  message?: LastMessage | string
-  unreadMessageCount?: number
+  chatId: string
+  participant: ChatParticipant
+  lastMessageText: string
+  unreadCount: number
 }
 
-/** Safely extract display text from whatever the server sends as `message` */
-function getLastMessageText(message: LastMessage | string | undefined): string {
-  if (!message) return ''
-  if (typeof message === 'string') return message
-  if (message.text) return message.text
-  if (message.imageUrl?.length) return '📎 Image'
+// ─── Parsers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Extract the other participant's display info from a raw chat list item.
+ * The server may return participants: [] for some items — handle gracefully.
+ */
+function extractParticipant(raw: RawChatListItem): ChatParticipant | null {
+  const participants = raw?.chat?.participants
+  if (!Array.isArray(participants) || participants.length === 0) return null
+  const p = participants[0]
+  if (!p?.user) return null
+  const u = p.user
+  return {
+    id: u.id ?? p.userId ?? '',
+    name: u.name ?? 'Unknown User',
+    image: u.profile ?? undefined,
+    email: u.email,
+  }
+}
+
+function extractLastMessageText(
+  msg: RawLastMessage | string | undefined
+): string {
+  if (!msg) return ''
+  if (typeof msg === 'string') return msg
+  if (msg.text) return msg.text
   return ''
+}
+
+/**
+ * Parse chat_list socket response.
+ * Shape: { chats: [...], pagination: { ... } }
+ */
+function parseChatList(res: unknown): ChatListItem[] {
+  if (!res || typeof res !== 'object') return []
+  const r = res as Record<string, unknown>
+  let rawChats: RawChatListItem[] = []
+
+  // { chats: [...] }
+  if (Array.isArray(r.chats)) {
+    rawChats = r.chats as RawChatListItem[]
+  }
+  // { data: { chats: [...] } }
+  else if (r.data && typeof r.data === 'object') {
+    const d = r.data as Record<string, unknown>
+    if (Array.isArray(d.chats)) rawChats = d.chats as RawChatListItem[]
+  }
+
+  return rawChats
+    .map((item): ChatListItem | null => {
+      const chatId = item?.chat?.id
+      if (!chatId) return null
+      const participant = extractParticipant(item)
+      if (!participant) return null
+      return {
+        chatId,
+        participant,
+        lastMessageText: extractLastMessageText(item.message),
+        unreadCount: item.unreadMessageCount ?? 0,
+      }
+    })
+    .filter((x): x is ChatListItem => x !== null)
+}
+
+/**
+ * Parse `message` socket response.
+ * Shape: { data: [...], meta: { ... } }
+ */
+function parseMessages(res: unknown): RawMessage[] {
+  if (!res) return []
+  if (Array.isArray(res)) return res as RawMessage[]
+  if (typeof res !== 'object') return []
+
+  const r = res as Record<string, unknown>
+
+  // { data: [...] }
+  if (Array.isArray(r.data)) return r.data as RawMessage[]
+
+  // { data: { data: [...] } }
+  if (r.data && typeof r.data === 'object') {
+    const inner = r.data as Record<string, unknown>
+    if (Array.isArray(inner.data)) return inner.data as RawMessage[]
+  }
+
+  return []
+}
+
+function normalizeMessage(raw: RawMessage): ChatMessage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const id = raw.id ?? raw._id
+  if (!id) return null
+
+  // senderId can be a top-level field or from nested sender object
+  const senderId = raw.senderId ?? raw.sender?.id ?? ''
+
+  const imageUrls = raw.images
+    ?.map((img) => img?.url)
+    .filter((url): url is string => Boolean(url))
+
+  return {
+    id,
+    senderId,
+    text: raw.text ?? '',
+    imageUrls: imageUrls?.length ? imageUrls : undefined,
+    timestamp: raw.createdAt,
+    chatId: raw.chatId ?? raw.chat?.id,
+  }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
-function getInitials(name: string) {
+/** Safe initials — never crashes on empty/undefined/null name */
+function getInitials(name?: string | null): string {
+  if (!name || typeof name !== 'string' || name.trim() === '') return '?'
   return name
-    .split(' ')
+    .trim()
+    .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((w) => w[0].toUpperCase())
     .join('')
 }
 
-function formatTime(iso?: string) {
+function formatMessageTime(iso?: string): string {
   if (!iso) return ''
-  const date = new Date(iso)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffMins = Math.floor(diffMs / 60_000)
-  const diffHours = Math.floor(diffMins / 60)
-  const diffDays = Math.floor(diffHours / 24)
-
-  if (diffMins < 1) return 'just now'
-  if (diffMins < 60) return `${diffMins}m ago`
-  if (diffHours < 24) return `${diffHours}h ago`
-  if (diffDays === 1) return 'Yesterday'
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  try {
+    return new Date(iso).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    })
+  } catch {
+    return ''
+  }
 }
 
-function formatMessageTime(iso?: string) {
+function formatDateDivider(iso?: string): string {
   if (!iso) return ''
-  return new Date(iso).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  })
+  try {
+    const date = new Date(iso)
+    const now = new Date()
+    const diffDays = Math.floor(
+      (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
+    )
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Yesterday'
+    return date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+    })
+  } catch {
+    return ''
+  }
 }
 
-function formatDateDivider(iso?: string) {
-  if (!iso) return ''
-  const date = new Date(iso)
-  const now = new Date()
-  const diffDays = Math.floor(
-    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
-  )
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return 'Yesterday'
-  return date.toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric'
-  })
-}
-
-function isSameDay(a?: string, b?: string) {
+function isSameDay(a?: string, b?: string): boolean {
   if (!a || !b) return false
-  return new Date(a).toDateString() === new Date(b).toDateString()
+  try {
+    return new Date(a).toDateString() === new Date(b).toDateString()
+  } catch {
+    return false
+  }
 }
 
 // ─── Avatar ────────────────────────────────────────────────────────────────────
@@ -154,17 +309,17 @@ function Avatar({
   name,
   image,
   size = 'md',
-  showOnline
+  showOnline,
 }: {
-  name: string
-  image?: string
+  name?: string | null
+  image?: string | null
   size?: 'sm' | 'md' | 'lg'
   showOnline?: boolean
 }) {
   const sizeClass = {
     sm: 'size-8 text-xs',
     md: 'size-10 text-sm',
-    lg: 'size-12 text-base'
+    lg: 'size-12 text-base',
   }[size]
 
   return (
@@ -172,14 +327,17 @@ function Avatar({
       {image ? (
         <img
           src={image}
-          alt={name}
+          alt={name ?? 'User'}
           className={`${sizeClass} rounded-full object-cover shadow-sm`}
+          onError={(e) => {
+            e.currentTarget.style.display = 'none'
+          }}
         />
       ) : (
         <span
           className={`
             ${sizeClass} flex items-center justify-center rounded-full
-            bg-linear-to-br from-[#00C0B5] to-[#00C0B5] font-bold text-white shadow-sm
+            bg-gradient-to-br from-[#00C0B5] to-[#009e94] font-bold text-white shadow-sm
           `}
         >
           {getInitials(name)}
@@ -197,7 +355,7 @@ function Avatar({
   )
 }
 
-// ─── Message Status ────────────────────────────────────────────────────────────
+// ─── Message Status Icon ───────────────────────────────────────────────────────
 
 function MessageStatusIcon({ status }: { status?: MessageStatus }) {
   if (status === 'sending') return <IconClock className='size-3 opacity-50' />
@@ -233,9 +391,7 @@ function TypingBubble() {
           <span
             key={i}
             className='size-1.5 rounded-full bg-muted-foreground/50'
-            style={{
-              animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`
-            }}
+            style={{ animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite` }}
           />
         ))}
       </div>
@@ -249,7 +405,7 @@ function MessageBubble({
   message,
   isOwn,
   showAvatar,
-  participant
+  participant,
 }: {
   message: ChatMessage
   isOwn: boolean
@@ -257,27 +413,53 @@ function MessageBubble({
   participant?: ChatParticipant
 }) {
   return (
-    <div className={`flex items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
-      {/* Avatar space */}
+    <div
+      className={`flex items-end gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}
+    >
+      {/* Avatar slot */}
       <div className='size-7 shrink-0'>
         {!isOwn && showAvatar && participant && (
           <Avatar name={participant.name} image={participant.image} size='sm' />
         )}
       </div>
 
-      <div className={`group flex max-w-[70%] flex-col gap-1 ${isOwn ? 'items-end' : 'items-start'}`}>
-        <div
-          className={`
-            rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm
-            ${isOwn
-              ? 'rounded-br-sm bg-[#00C0B5] text-white'
-              : 'rounded-bl-sm bg-muted text-foreground'
-            }
-            ${message.isPending ? 'opacity-60' : ''}
-          `}
-        >
-          {message.text}
-        </div>
+      <div
+        className={`group flex max-w-[70%] flex-col gap-1 ${
+          isOwn ? 'items-end' : 'items-start'
+        }`}
+      >
+        {/* Image attachments */}
+        {message.imageUrls && message.imageUrls.length > 0 && (
+          <div className='flex flex-wrap gap-1'>
+            {message.imageUrls.map((url, i) => (
+              <img
+                key={i}
+                src={url}
+                alt='attachment'
+                className='max-h-48 max-w-xs rounded-xl object-cover shadow-sm'
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Text bubble */}
+        {message.text && (
+          <div
+            className={`
+              rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm
+              ${
+                isOwn
+                  ? 'rounded-br-sm bg-[#00C0B5] text-white'
+                  : 'rounded-bl-sm bg-muted text-foreground'
+              }
+              ${message.isPending ? 'opacity-60' : ''}
+            `}
+          >
+            {message.text}
+          </div>
+        )}
+
+        {/* Timestamp + status */}
         <div className='flex items-center gap-1 px-1'>
           <span className='text-[10px] text-muted-foreground'>
             {formatMessageTime(message.timestamp)}
@@ -292,19 +474,16 @@ function MessageBubble({
 // ─── Conversation Item ─────────────────────────────────────────────────────────
 
 function ConversationItem({
-  chatData,
+  item,
   isActive,
   isOnline,
-  onClick
+  onClick,
 }: {
-  chatData: ChatListItem
+  item: ChatListItem
   isActive: boolean
   isOnline: boolean
   onClick: () => void
 }) {
-  const participant = chatData.chat.participants?.[0]
-  if (!participant) return null
-
   return (
     <button
       onClick={onClick}
@@ -313,21 +492,36 @@ function ConversationItem({
         ${isActive ? 'bg-accent' : 'hover:bg-accent/50'}
       `}
     >
-      <Avatar name={participant.name} image={participant.image} size='md' showOnline={isOnline} />
+      <Avatar
+        name={item.participant.name}
+        image={item.participant.image}
+        size='md'
+        showOnline={isOnline}
+      />
       <div className='min-w-0 flex-1'>
         <div className='flex items-center justify-between gap-1'>
-          <span className={`truncate text-sm font-semibold ${chatData.unreadMessageCount ? 'text-foreground' : 'text-foreground/80'}`}>
-            {participant.name}
+          <span
+            className={`truncate text-sm font-semibold ${
+              item.unreadCount > 0 ? 'text-foreground' : 'text-foreground/80'
+            }`}
+          >
+            {item.participant.name}
           </span>
-          {chatData.unreadMessageCount && chatData.unreadMessageCount > 0 ? (
+          {item.unreadCount > 0 && (
             <span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-[#00C0B5] text-[10px] font-bold text-white'>
-              {chatData.unreadMessageCount > 9 ? '9+' : chatData.unreadMessageCount}
+              {item.unreadCount > 9 ? '9+' : item.unreadCount}
             </span>
-          ) : null}
+          )}
         </div>
-        {getLastMessageText(chatData.message) && (
-          <p className={`mt-0.5 truncate text-xs ${chatData.unreadMessageCount ? 'font-medium text-foreground/90' : 'text-muted-foreground'}`}>
-            {getLastMessageText(chatData.message)}
+        {item.lastMessageText && (
+          <p
+            className={`mt-0.5 truncate text-xs ${
+              item.unreadCount > 0
+                ? 'font-medium text-foreground/90'
+                : 'text-muted-foreground'
+            }`}
+          >
+            {item.lastMessageText}
           </p>
         )}
       </div>
@@ -335,27 +529,27 @@ function ConversationItem({
   )
 }
 
-// ─── Left Panel ────────────────────────────────────────────────────────────────
+// ─── Conversation List (left panel) ───────────────────────────────────────────
 
 function ConversationList({
-  chatListData,
-  activeUserId,
+  items,
+  activeChatId,
   isLoading,
   onlineUsers,
-  onSelect
+  onSelect,
 }: {
-  chatListData: ChatListItem[]
-  activeUserId: string
+  items: ChatListItem[]
+  activeChatId: string
   isLoading: boolean
   onlineUsers: string[]
-  onSelect: (userId: string, chatId: string, participant: ChatParticipant) => void
+  onSelect: (item: ChatListItem) => void
 }) {
   return (
     <aside className='flex h-full w-72 shrink-0 flex-col border-r xl:w-80'>
       <div className='px-5 py-4'>
         <h2 className='text-lg font-bold tracking-tight'>Messages</h2>
         <p className='text-xs text-muted-foreground mt-0.5'>
-          {chatListData.length} conversation{chatListData.length !== 1 ? 's' : ''}
+          {items.length} conversation{items.length !== 1 ? 's' : ''}
         </p>
       </div>
 
@@ -374,26 +568,22 @@ function ConversationList({
               </div>
             ))}
           </div>
-        ) : chatListData.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className='flex flex-col items-center justify-center gap-2 py-16 text-center'>
             <IconMessageCircle className='size-8 text-muted-foreground/40' />
             <p className='text-sm text-muted-foreground'>No conversations yet</p>
           </div>
         ) : (
           <div className='flex flex-col gap-0.5 p-2'>
-            {chatListData.map((chatData, idx) => {
-              const participant = chatData.chat.participants?.[0]
-              if (!participant) return null
-              return (
-                <ConversationItem
-                  key={idx}
-                  chatData={chatData}
-                  isActive={activeUserId === participant._id}
-                  isOnline={onlineUsers.includes(participant._id)}
-                  onClick={() => onSelect(participant._id, chatData.chat._id, participant)}
-                />
-              )
-            })}
+            {items.map((item) => (
+              <ConversationItem
+                key={item.chatId}
+                item={item}
+                isActive={activeChatId === item.chatId}
+                isOnline={onlineUsers.includes(item.participant.id)}
+                onClick={() => onSelect(item)}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -406,7 +596,7 @@ function ConversationList({
 function ChatInput({
   disabled,
   onSend,
-  onTyping
+  onTyping,
 }: {
   disabled: boolean
   onSend: (text: string) => void
@@ -465,7 +655,7 @@ function ChatInput({
   )
 }
 
-// ─── No Conversation Selected ──────────────────────────────────────────────────
+// ─── Empty state ───────────────────────────────────────────────────────────────
 
 function NoConversationSelected() {
   return (
@@ -474,7 +664,9 @@ function NoConversationSelected() {
         <IconMessageCircle className='size-10 text-muted-foreground/40' />
       </div>
       <div>
-        <p className='text-base font-semibold text-foreground/80'>No conversation selected</p>
+        <p className='text-base font-semibold text-foreground/80'>
+          No conversation selected
+        </p>
         <p className='mt-1 text-sm text-muted-foreground'>
           Choose a conversation from the left to get started
         </p>
@@ -486,17 +678,18 @@ function NoConversationSelected() {
 // ─── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CustomerSupportPage() {
-  const { socket } = useSocket();
+  const { socket } = useSocket()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const user: any = useAppSelector((state) => state.auth.user)
+  // Support both userId and id field names from auth state
+  const currentUserId: string = user?.userId ?? user?.id ?? ''
 
   // ── State ──────────────────────────────────────────────────────────────────
-  const [chatListData, setChatListData] = useState<ChatListItem[]>([])
+  const [chatItems, setChatItems] = useState<ChatListItem[]>([])
   const [isChatListLoading, setIsChatListLoading] = useState(false)
 
-  const [selectedUserId, setSelectedUserId] = useState<string>('')
-  const [selectedChatId, setSelectedChatId] = useState<string>('')
-  const [selectedParticipant, setSelectedParticipant] = useState<ChatParticipant | null>(null)
+  const [activeItem, setActiveItem] = useState<ChatListItem | null>(null)
+  const [activeChatId, setActiveChatId] = useState<string>('')
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isMessagesLoading, setIsMessagesLoading] = useState(false)
@@ -505,9 +698,13 @@ export default function CustomerSupportPage() {
   const [isTyping, setIsTyping] = useState(false)
 
   const chatBoxRef = useRef<HTMLDivElement>(null)
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  // Stable ref so event callbacks never see a stale chatId
+  const activeChatIdRef = useRef<string>('')
 
-
+  useEffect(() => {
+    activeChatIdRef.current = activeChatId
+  }, [activeChatId])
 
   // ── Auto-scroll ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -517,196 +714,248 @@ export default function CustomerSupportPage() {
   }, [messages, isTyping])
 
   // ── Chat list ──────────────────────────────────────────────────────────────
+  // Emit:    my_chat_list  → {}
+  // Receive: chat_list     → { chats: [...], pagination: { ... } }
   useEffect(() => {
-    if (!socket || !user?.userId) return
+    if (!socket || !currentUserId) return
 
     const fetchChatList = () => {
       setIsChatListLoading(true)
-      socket.emit('my_chat_list', { page: 1, limit: 9999 })
+      socket.emit('my_chat_list', {})
     }
 
-    const handleChatList = (res: { chats: ChatListItem[] }) => {
-      setChatListData(res?.chats ?? [])
-      setIsChatListLoading(false)
+    const handleChatList = (res: unknown) => {
+      try {
+        setChatItems(parseChatList(res))
+      } catch (err) {
+        console.error('[chat_list] parse error:', err)
+        setChatItems([])
+      } finally {
+        setIsChatListLoading(false)
+      }
     }
 
-    // Register listener FIRST, then emit — eliminates the race condition
     socket.on('chat_list', handleChatList)
-
-    // Emit immediately if already connected, otherwise wait for the connect event
-    if (socket.connected) {
-      fetchChatList()
-    }
-
-    // Re-fetch on connect / reconnect (covers cold-start and socket drop cases)
+    if (socket.connected) fetchChatList()
     socket.on('connect', fetchChatList)
 
     return () => {
       socket.off('chat_list', handleChatList)
       socket.off('connect', fetchChatList)
     }
-  }, [socket, user?.userId])
+  }, [socket, currentUserId])
 
   // ── Online users ───────────────────────────────────────────────────────────
+  // Receive: onlineUsersList → ["userId1", "userId2", ...]
   useEffect(() => {
-    if (!socket || !user?.userId) return
+    if (!socket) return
 
-    const handleOnlineUsers = (res: string[]) => setOnlineUsers(res)
-
-    socket.on('onlineUser', handleOnlineUsers)
-
-    return () => {
-      socket.off('onlineUser', handleOnlineUsers)
+    const handleOnline = (res: unknown) => {
+      try {
+        setOnlineUsers(
+          Array.isArray(res)
+            ? res.filter((id): id is string => typeof id === 'string')
+            : []
+        )
+      } catch {
+        setOnlineUsers([])
+      }
     }
-  }, [socket, user?.userId])
+
+    socket.on('onlineUsersList', handleOnline)
+    return () => {
+      socket.off('onlineUsersList', handleOnline)
+    }
+  }, [socket])
 
   // ── Messages for active conversation ──────────────────────────────────────
+  // Emit:    message_page → { userId: "..." }
+  // Receive: message      → { data: [...], meta: { ... } }
   useEffect(() => {
-    if (!socket || !user?.userId || !selectedUserId) return
+    if (!socket || !currentUserId || !activeItem) return
+
+    const participantUserId = activeItem.participant.id
 
     const fetchMessages = () => {
       setIsMessagesLoading(true)
-      socket.emit('message_page', { userId: selectedUserId, page: 1, limit: 9999 })
+      socket.emit('message_page', { userId: participantUserId })
     }
 
-    const handleMessages = (res: {
-      success?: boolean
-      data?: { data?: ServerMessage[] } | ServerMessage[]
-    }) => {
-      // Server shape: { data: { data: [...], meta: {...} } }
-      // Handles both double-nested and flat array shapes defensively
-      let raw: ServerMessage[] = []
-      const outer = res?.data
-      if (Array.isArray(outer)) {
-        raw = outer
-      } else if (outer && typeof outer === 'object' && 'data' in outer && Array.isArray((outer as { data: ServerMessage[] }).data)) {
-        raw = (outer as { data: ServerMessage[] }).data
+    const handleMessages = (res: unknown) => {
+      try {
+        const raw = parseMessages(res)
+        const normalized = raw
+          .map(normalizeMessage)
+          .filter((m): m is ChatMessage => m !== null)
+          .reverse() // server returns newest-first; reverse for oldest-at-top
+        setMessages((normalized.reverse()))
+      } catch (err) {
+        console.error('[message] parse error:', err)
+        setMessages([])
+      } finally {
+        setIsMessagesLoading(false)
       }
-      setMessages(raw.map(normalizeMessage).reverse())
-      setIsMessagesLoading(false)
 
-      if (selectedChatId) {
-        socket.emit('seen', { chatId: selectedChatId })
-      }
+      const chatId = activeChatIdRef.current
+      if (chatId) socket.emit('seen', { chatId })
     }
 
-    // Register listener FIRST, then emit
     socket.on('message', handleMessages)
-
-    if (socket.connected) {
-      fetchMessages()
-    }
-
-    // Re-fetch if socket reconnects while this conversation is open
+    if (socket.connected) fetchMessages()
     socket.on('connect', fetchMessages)
 
     return () => {
       socket.off('message', handleMessages)
       socket.off('connect', fetchMessages)
     }
-  }, [socket, user?.userId, selectedUserId])
+  }, [socket, currentUserId, activeItem])
 
-  // ── New message (real-time) ────────────────────────────────────────────────
+  // ── Real-time new messages ─────────────────────────────────────────────────
+  // Receive: new_message → same RawMessage shape
   useEffect(() => {
-    if (!socket || !selectedChatId) return
+    if (!socket) return
 
-    const event = `new-message::${selectedChatId}`
+    const handleNewMessage = (res: unknown) => {
+      if (!res || typeof res !== 'object') return
 
-    socket.on(event, (res: ServerMessage) => {
-      const normalized = normalizeMessage(res)
-      setMessages((prev) => {
-        // Drop any matching optimistic (temp) message by text+sender, then append real one
-        const withoutOptimistic = prev.filter(
-          (m) => !(m.isPending && m.text === normalized.text && m.sender === normalized.sender)
+      const normalized = normalizeMessage(res as RawMessage)
+      if (!normalized) return
+
+      const currentChatId = activeChatIdRef.current
+      const msgChatId = normalized.chatId
+
+      // Message belongs to a different chat — bump sidebar unread count only
+      if (currentChatId && msgChatId && msgChatId !== currentChatId) {
+        setChatItems((prev) =>
+          prev.map((item) =>
+            item.chatId === msgChatId
+              ? {
+                  ...item,
+                  unreadCount: item.unreadCount + 1,
+                  lastMessageText: normalized.text || item.lastMessageText,
+                }
+              : item
+          )
         )
-        const exists = withoutOptimistic.find((m) => m.id === normalized.id)
-        if (exists) return withoutOptimistic
+        return
+      }
+
+      // Belongs to open chat — append (replacing any optimistic copy)
+      setMessages((prev) => {
+        const withoutOptimistic = prev.filter(
+          (m) =>
+            !(
+              m.isPending &&
+              m.text === normalized.text &&
+              m.senderId === normalized.senderId
+            )
+        )
+        if (withoutOptimistic.find((m) => m.id === normalized.id))
+          return withoutOptimistic
         return [...withoutOptimistic, normalized]
       })
-      socket.emit('seen', { chatId: selectedChatId })
-    })
 
-    return () => {
-      socket.off(event)
+      if (currentChatId) socket.emit('seen', { chatId: currentChatId })
     }
-  }, [socket, selectedChatId])
+
+    socket.on('new_message', handleNewMessage)
+    return () => {
+      socket.off('new_message', handleNewMessage)
+    }
+  }, [socket])
 
   // ── Typing indicator ───────────────────────────────────────────────────────
   useEffect(() => {
-    if (!socket || !selectedChatId) return
+    if (!socket || !activeChatId) return
 
-    socket.on(`typing::${selectedChatId}`, (res: { userId: string; isTyping: boolean }) => {
-      if (res.userId !== user?.userId) {
-        setIsTyping(res.isTyping)
-        if (res.isTyping) {
+    const handleTyping = (res: unknown) => {
+      if (!res || typeof res !== 'object') return
+      const r = res as { userId?: string; isTyping?: boolean }
+      if (r.userId && r.userId !== currentUserId) {
+        setIsTyping(!!r.isTyping)
+        if (r.isTyping) {
           if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
-          typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 4000)
+          typingTimeoutRef.current = setTimeout(
+            () => setIsTyping(false),
+            4000
+          )
         }
       }
-    })
-
-    return () => {
-      socket.off(`typing::${selectedChatId}`)
     }
-  }, [socket, selectedChatId, user?.userId])
+
+    socket.on(`typing::${activeChatId}`, handleTyping)
+    return () => {
+      socket.off(`typing::${activeChatId}`, handleTyping)
+    }
+  }, [socket, activeChatId, currentUserId])
 
   // ── Select conversation ────────────────────────────────────────────────────
   const handleSelectConversation = useCallback(
-    (userId: string, chatId: string, participant: ChatParticipant) => {
-      if (userId === selectedUserId) return
-      setSelectedUserId(userId)
-      setSelectedChatId(chatId)
-      setSelectedParticipant(participant)
+    (item: ChatListItem) => {
+      if (item.chatId === activeChatId) return
+      setActiveItem(item)
+      setActiveChatId(item.chatId)
+      activeChatIdRef.current = item.chatId
       setMessages([])
       setIsTyping(false)
-       socket?.emit('seen', { chatId })
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+      // Clear unread badge for this chat in the sidebar
+      setChatItems((prev) =>
+        prev.map((c) =>
+          c.chatId === item.chatId ? { ...c, unreadCount: 0 } : c
+        )
+      )
+      socket?.emit('seen', { chatId: item.chatId })
     },
-    [selectedUserId]
+    [activeChatId, socket]
   )
 
   // ── Send message ───────────────────────────────────────────────────────────
+  // Emit: send_message → { receiverId: "...", text: "..." }
   const handleSend = useCallback(
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
     (text: string) => {
-      if (!socket || !user?.userId || !selectedUserId) return
+      if (!socket || !currentUserId || !activeItem) return
 
-      // Optimistic insert
       const tempId = `tmp_${Date.now()}`
       const optimistic: ChatMessage = {
         id: tempId,
-        sender: user.userId,
+        senderId: currentUserId,
         text,
         timestamp: new Date().toISOString(),
+        chatId: activeChatId,
         status: 'sending',
-        isPending: true
+        isPending: true,
       }
       setMessages((prev) => [...prev, optimistic])
 
-      socket.emit('send_message', { receiver: selectedUserId, text });
+      socket.emit('send_message', {
+        receiverId: activeItem.participant.id,
+        text,
+      })
 
-
-
-      // Mark optimistic as sent after a short delay (server will push real msg via new-message event)
+      // Mark optimistic as sent; real message arrives via new_message event
       setTimeout(() => {
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === tempId ? { ...m, status: 'sent' as MessageStatus, isPending: false } : m
+            m.id === tempId
+              ? { ...m, status: 'sent' as MessageStatus, isPending: false }
+              : m
           )
         )
       }, 800)
     },
-    [socket, user?.userId, selectedUserId]
+    [socket, currentUserId, activeItem, activeChatId]
   )
 
   // ── Emit typing ────────────────────────────────────────────────────────────
   const handleTyping = useCallback(() => {
-    if (!socket || !selectedChatId) return
-    socket.emit('typing', { chatId: selectedChatId, isTyping: true })
+    if (!socket || !activeChatId) return
+    socket.emit('typing', { chatId: activeChatId, isTyping: true })
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
     typingTimeoutRef.current = setTimeout(() => {
-      socket.emit('typing', { chatId: selectedChatId, isTyping: false })
+      socket.emit('typing', { chatId: activeChatId, isTyping: false })
     }, 2000)
-  }, [socket, selectedChatId])
+  }, [socket, activeChatId])
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -716,23 +965,26 @@ export default function CustomerSupportPage() {
         <div>
           <h1 className='text-xl font-bold tracking-tight'>Customer Support</h1>
           <p className='text-xs text-muted-foreground'>
-            {chatListData.length} conversation{chatListData.length !== 1 ? 's' : ''}
+            {chatItems.length} conversation
+            {chatItems.length !== 1 ? 's' : ''}
           </p>
         </div>
-        {/* Socket status */}
         <div className='flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs text-muted-foreground'>
-          <span className={`size-2 rounded-full ${socket?.connected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+          <span
+            className={`size-2 rounded-full ${
+              socket?.connected ? 'bg-emerald-500' : 'bg-amber-500'
+            }`}
+          />
           {socket?.connected ? 'Live' : 'Connecting…'}
         </div>
       </div>
 
       {/* Main layout */}
       <div className='flex min-h-0 flex-1 overflow-hidden rounded-2xl border bg-background shadow-sm'>
-
         {/* Left — conversation list */}
         <ConversationList
-          chatListData={chatListData}
-          activeUserId={selectedUserId}
+          items={chatItems}
+          activeChatId={activeChatId}
           isLoading={isChatListLoading}
           onlineUsers={onlineUsers}
           onSelect={handleSelectConversation}
@@ -740,22 +992,26 @@ export default function CustomerSupportPage() {
 
         {/* Right — chat area */}
         <div className='flex min-w-0 flex-1 flex-col'>
-          {!selectedParticipant ? (
+          {!activeItem ? (
             <NoConversationSelected />
           ) : (
             <>
               {/* Header */}
               <div className='flex h-16 shrink-0 items-center gap-3 border-b px-5'>
                 <Avatar
-                  name={selectedParticipant.name}
-                  image={selectedParticipant.image}
+                  name={activeItem.participant.name}
+                  image={activeItem.participant.image}
                   size='sm'
-                  showOnline={onlineUsers.includes(selectedParticipant._id)}
+                  showOnline={onlineUsers.includes(activeItem.participant.id)}
                 />
                 <div className='min-w-0'>
-                  <p className='truncate text-sm font-semibold'>{selectedParticipant.name}</p>
+                  <p className='truncate text-sm font-semibold'>
+                    {activeItem.participant.name}
+                  </p>
                   <p className='text-xs text-muted-foreground'>
-                    {onlineUsers.includes(selectedParticipant._id) ? 'Online' : 'Offline'}
+                    {onlineUsers.includes(activeItem.participant.id)
+                      ? 'Online'
+                      : 'Offline'}
                   </p>
                 </div>
               </div>
@@ -767,46 +1023,56 @@ export default function CustomerSupportPage() {
               >
                 {isMessagesLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className={`flex gap-2 ${i % 2 === 0 ? 'flex-row' : 'flex-row-reverse'}`}>
+                    <div
+                      key={i}
+                      className={`flex gap-2 ${
+                        i % 2 === 0 ? 'flex-row' : 'flex-row-reverse'
+                      }`}
+                    >
                       <Skeleton className='size-7 shrink-0 rounded-full' />
-                      <Skeleton className={`h-10 rounded-2xl ${i % 2 === 0 ? 'w-56' : 'w-44'}`} />
+                      <Skeleton
+                        className={`h-10 rounded-2xl ${
+                          i % 2 === 0 ? 'w-56' : 'w-44'
+                        }`}
+                      />
                     </div>
                   ))
                 ) : messages.length === 0 ? (
                   <div className='flex flex-1 flex-col items-center justify-center gap-2 text-center'>
                     <IconMessageCircle className='size-12 text-muted-foreground/20' />
-                    <p className='text-sm text-muted-foreground'>No messages yet</p>
-                    <p className='text-xs text-muted-foreground/60'>Start the conversation below</p>
+                    <p className='text-sm text-muted-foreground'>
+                      No messages yet
+                    </p>
+                    <p className='text-xs text-muted-foreground/60'>
+                      Start the conversation below
+                    </p>
                   </div>
                 ) : (
                   messages.map((msg, idx) => {
                     const prev = messages[idx - 1]
-                    const showDivider = !prev || !isSameDay(prev.timestamp, msg.timestamp)
+                    const showDivider =
+                      !prev || !isSameDay(prev.timestamp, msg.timestamp)
                     const isNewGroup =
                       !prev ||
-                      prev.sender !== msg.sender ||
-                      new Date(msg.timestamp ?? 0).getTime() - new Date(prev.timestamp ?? 0).getTime() > 5 * 60_000
-                    // sender may be userId string or nested object — normalize to string
-                    const senderId = typeof msg.sender === 'object'
-                      ? (msg.sender as { _id?: string })?._id
-                      : msg.sender
-                    const isOwn = senderId === user?.userId
+                      prev.senderId !== msg.senderId ||
+                      new Date(msg.timestamp ?? 0).getTime() -
+                        new Date(prev.timestamp ?? 0).getTime() >
+                        5 * 60_000
+                    const isOwn = msg.senderId === currentUserId
 
                     return (
                       <div key={msg.id}>
                         {showDivider && (
-                          <DateDivider label={formatDateDivider(msg.timestamp)} />
+                          <DateDivider
+                            label={formatDateDivider(msg.timestamp)}
+                          />
                         )}
                         <div className={isNewGroup ? 'mt-3' : 'mt-0.5'}>
                           <MessageBubble
-                            message={{
-                              ...msg, sender: typeof msg.sender === 'object'
-                                ? (msg.sender as { _id?: string })?._id ?? ''
-                                : msg.sender
-                            }}
+                            message={msg}
                             isOwn={isOwn}
                             showAvatar={isNewGroup}
-                            participant={selectedParticipant}
+                            participant={activeItem.participant}
                           />
                         </div>
                       </div>
