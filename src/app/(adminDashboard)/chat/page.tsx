@@ -619,7 +619,7 @@ function ChatInput({
 
 function NoConversationSelected() {
   return (
-    <div className='flex flex-1 flex-col items-center justify-center gap-4 text-center'>
+    <div className='flex flex-1 flex-col items-center justify-center gap-4 text-center h-[calc(100vh-320px)]'>
       <div className='flex size-20 items-center justify-center rounded-full bg-muted'>
         <IconMessageCircle className='size-10 text-muted-foreground/40' />
       </div>
@@ -743,7 +743,6 @@ export default function CustomerSupportPage() {
         const normalized = raw
           .map(normalizeMessage)
           .filter((m): m is ChatMessage => m !== null)
-          .reverse() // server returns newest-first; reverse for oldest-at-top
         setMessages(normalized)
       } catch (err) {
         console.error('[message] parse error:', err)
@@ -920,7 +919,7 @@ export default function CustomerSupportPage() {
       {/* Page title */}
       <div className='flex h-12 shrink-0 items-center justify-between px-1 pb-3'>
         <div>
-          <h1 className='text-xl font-bold tracking-tight'>Customer Support</h1>
+          <h1 className='md:text-xl text-sm font-bold tracking-tight'>Customer Support</h1>
           <p className='text-xs text-muted-foreground'>
             {chatItems.length} conversation
             {chatItems.length !== 1 ? 's' : ''}
@@ -1006,7 +1005,7 @@ export default function CustomerSupportPage() {
               {/* Messages — fixed height, scrollable */}
               <div
                 ref={chatBoxRef}
-                className='flex flex-col gap-1 overflow-y-auto px-5 py-4 h-[calc(100vh-220px)]'
+                className='flex flex-col gap-1 overflow-y-auto px-5 py-4 h-[calc(100vh-320px)]'
               >
                 {isMessagesLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (

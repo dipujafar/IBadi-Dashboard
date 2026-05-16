@@ -33,7 +33,6 @@ export const SocketProvider = ({ children }: { children: ReactNode }) => {
       });
 
       socketStore.on("connect", () => {
-        toast.success("soket conneted")
         setSocketLoading(false);
       });
 
