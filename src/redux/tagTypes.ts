@@ -11,6 +11,7 @@ export const tagTypes = {
   faq: "faq",
   booking: "booking",
   dashboard: "dashboard",
+  verification: "verification",
 };
 
 export const tagTypesList = [
@@ -26,4 +27,5 @@ export const tagTypesList = [
   tagTypes.faq,
   tagTypes.booking,
   tagTypes.dashboard,
+  tagTypes.verification,
 ];

@@ -1,7 +1,7 @@
 import { RiDashboardHorizontalFill } from "react-icons/ri";
 import { IoBookmarksOutline, IoSettingsOutline } from "react-icons/io5";
 import Link from "next/link";
-import { MessageCircleMore, UsersRound, } from "lucide-react";
+import { BadgeCheck, MessageCircleMore, UsersRound, } from "lucide-react";
 import { BiCategory } from "react-icons/bi";
 import { GrUserExpert } from "react-icons/gr";
 import { MdAddTask } from "react-icons/md";
@@ -18,6 +18,11 @@ export const navLinks = [
     key: "account-details",
     icon: <UsersRound size={18} />,
     label: <Link href={"/account-details"}>User Details</Link>,
+  },
+  {
+    key: "verification-request",
+    icon: <BadgeCheck size={18} />,
+    label: <Link href={"/verification-request"}>Verification</Link>,
   },
   {
     key: "categories-management",
